@@ -3,101 +3,42 @@ import time
 import sqlite3
 import random
 import re
-from flask import Flask, request, redirect, render_template_string
+import logging
+import socket
+from flask import Flask, request, redirect, render_template, session, url_for
 from rich.console import Console
 from rich.table import Table
+from shutil import get_terminal_size
+from functools import wraps
 
 DB_FILE = "inventory.db"
 app = Flask(__name__)
+app.secret_key = "change_this_to_a_random_secret!"  # CHANGE THIS for production
+
+ver = "2.1.1"
+
 console = Console()
 
-# Configurable product code format: letters + digits, e.g. "EUK111111" or "JOS111"
-PRODUCT_CODE_FORMAT = "EUK111111"  # Change this as you like
+PRODUCT_CODE_FORMAT = "EUK111111"
 
+# Hardcoded credentials
+VALID_USERNAME = "admin"
+VALID_PASSWORD = "password123"
 
-TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <title>Inventory Management</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        table { border-collapse: collapse; width: 100%; max-width: 900px; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-        th { background-color: #f0f0f0; }
-        input[type=number] { width: 60px; }
-        input[type=text] { width: 100px; }
-        input[type=checkbox] { transform: scale(1.2); }
-        .low-stock { background-color: #ffcccc; }
-        form { margin-top: 20px; }
-    </style>
-</head>
-<body>
-    <h1>Inventory Management</h1>
-
-    <table>
-        <thead>
-            <tr>
-                <th>Product Code</th>
-                <th>Item</th>
-                <th>Quantity</th>
-                <th>Low Threshold</th>
-                <th>On Order</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for row in stock %}
-            <tr class="{{ 'low-stock' if row.quantity <= row.low_threshold else '' }}">
-                <form method="post" action="/update/{{ row.item }}">
-                <td><input name="product_code" type="text" value="{{ row.product_code or '' }}" required></td>
-                <td>{{ row.item }}</td>
-                <td><input name="quantity" type="number" min="0" value="{{ row.quantity }}" required></td>
-                <td><input name="low_threshold" type="number" min="0" value="{{ row.low_threshold }}" required></td>
-                <td style="text-align:center;">
-                    <input name="on_order" type="checkbox" value="1" {% if row.on_order %}checked{% endif %}>
-                </td>
-                <td>
-                    <button type="submit">Save</button>
-                    <a href="/delete/{{ row.item }}" onclick="return confirm('Delete item?');">Delete</a>
-                </td>
-                </form>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-
-    <h2>Add New Item</h2>
-    <form method="post" action="/add" onsubmit="return checkProductCode();">
-        <label>Product Code: <input name="product_code" id="product_code" type="text"></label><br><br>
-        <label>Item Name: <input name="item" id="item_name" type="text" required></label><br><br>
-        <label>Quantity: <input name="quantity" type="number" min="0" value="0" required></label><br><br>
-        <label>Low Threshold: <input name="low_threshold" type="number" min="0" value="5" required></label><br><br>
-        <label>On Order: <input name="on_order" type="checkbox" value="1"></label><br><br>
-        <button type="submit">Add Item</button>
-    </form>
-
-    <script>
-    function checkProductCode() {
-        const code = document.getElementById("product_code").value.trim();
-        const item = document.getElementById("item_name").value.trim();
-        if (!code) {
-            return confirm(`No product code entered for "${item}". Generate one automatically?`);
-        }
-        return true;
-    }
-    </script>
-</body>
-</html>
-"""
-
+def get_ip_address():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        ip = "127.0.0.1"
+    return ip
 
 def get_db_connection():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 def create_table_if_not_exists():
     conn = get_db_connection()
@@ -113,33 +54,21 @@ def create_table_if_not_exists():
     conn.commit()
     conn.close()
 
-
 def parse_product_code_format(fmt: str):
-    """
-    Parse the product code format into (prefix_letters, number_count).
-    Example: "EUK111111" => ("EUK", 6)
-             "111" => ("", 3)
-             "JOS111" => ("JOS", 3)
-    """
     match = re.match(r"([A-Za-z]*)(1+)", fmt)
     if not match:
-        # fallback: no prefix, 6 digits
         return "", 6
     prefix, ones = match.groups()
     return prefix, len(ones)
-
 
 def generate_unique_code(conn, fmt):
     prefix, num_digits = parse_product_code_format(fmt)
     while True:
         number_part = ''.join(str(random.randint(0, 9)) for _ in range(num_digits))
         code = f"{prefix}{number_part}"
-        exists = conn.execute(
-            "SELECT 1 FROM stock WHERE product_code = ?", (code,)
-        ).fetchone()
+        exists = conn.execute("SELECT 1 FROM stock WHERE product_code = ?", (code,)).fetchone()
         if not exists:
             return code
-
 
 def fetch_all_stock():
     conn = get_db_connection()
@@ -147,9 +76,12 @@ def fetch_all_stock():
     conn.close()
     return stock
 
-
 def draw_table(stock):
-    table = Table(show_header=True, header_style="bold cyan")
+    terminal_width = get_terminal_size().columns
+    ip = get_ip_address()
+    ip_line = f"InvManage (c) Elec UK. Access the web UI at: http://{ip}:8080".center(terminal_width)
+
+    table = Table(show_header=True, header_style="bold cyan", expand=True)
     table.add_column("Product Code", style="dim", width=12)
     table.add_column("Item", style="bold")
     table.add_column("Quantity", justify="right")
@@ -168,32 +100,62 @@ def draw_table(stock):
             on_order_str,
             style=style,
         )
+
     console.clear()
+    console.print(ip_line, style="bold green", markup=False)
     console.print(table)
+    print("Press Ctrl+H for help".ljust(terminal_width), end="")
 
-
-last_db_snapshot = None  # to detect changes
-
+last_db_snapshot = None
 
 def monitor_db_and_draw(interval=1.0):
     global last_db_snapshot
     while True:
         stock = fetch_all_stock()
-        # Compare with last snapshot to see if changed
         current_snapshot = [(r["product_code"], r["item"], r["quantity"], r["low_threshold"], r["on_order"]) for r in stock]
         if current_snapshot != last_db_snapshot:
             draw_table(stock)
             last_db_snapshot = current_snapshot
         time.sleep(interval)
 
+# --- Authentication ---
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+        if username == VALID_USERNAME and password == VALID_PASSWORD:
+            session["logged_in"] = True
+            return redirect(url_for("index"))
+        else:
+            error = "Invalid username or password"
+    return render_template("login.html", error=error)
+
+@app.route("/logout")
+def logout():
+    session.pop("logged_in", None)
+    return redirect(url_for("login"))
+
+# --- Inventory routes ---
 
 @app.route("/")
+@login_required
 def index():
     stock = fetch_all_stock()
-    return render_template_string(TEMPLATE, stock=stock)
-
+    return render_template("index.html", stock=stock)
 
 @app.route("/update/<item>", methods=["POST"])
+@login_required
 def update(item):
     product_code = request.form["product_code"].strip()
     quantity = int(request.form["quantity"])
@@ -213,8 +175,8 @@ def update(item):
     conn.close()
     return redirect("/")
 
-
 @app.route("/add", methods=["POST"])
+@login_required
 def add():
     product_code = request.form["product_code"].strip()
     item = request.form["item"].strip()
@@ -233,14 +195,14 @@ def add():
         """, (product_code, item, quantity, low_threshold, on_order))
         conn.commit()
     except sqlite3.IntegrityError:
-        pass  # could add error message for duplicate
+        pass
     finally:
         conn.close()
 
     return redirect("/")
 
-
 @app.route("/delete/<item>")
+@login_required
 def delete(item):
     conn = get_db_connection()
     conn.execute("DELETE FROM stock WHERE item = ?", (item,))
@@ -248,24 +210,20 @@ def delete(item):
     conn.close()
     return redirect("/")
 
+# --- Run Flask silently ---
 
 def run_flask():
-    # Hide flask output if you want (optional)
-    import logging
     log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-
+    log.disabled = True
+    app.logger.disabled = True
+    logging.getLogger().disabled = True
     app.run(host="0.0.0.0", port=8080)
-
 
 def main():
     create_table_if_not_exists()
-
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-
     monitor_db_and_draw(interval=1.0)
-
 
 if __name__ == "__main__":
     main()

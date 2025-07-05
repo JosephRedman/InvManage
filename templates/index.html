@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Inventory Management</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="{{ url_for('static', filename='js/main.js') }}" defer></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Inventory Management</h1>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Product Code</th>
+                    <th>Item</th>
+                    <th>Quantity</th>
+                    <th>Low Threshold</th>
+                    <th>On Order</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in stock %}
+                <tr class="{{ 'low-stock' if row.quantity <= row.low_threshold else '' }}">
+                    <form method="post" action="/update/{{ row.item }}">
+                        <td><input name="product_code" type="text" value="{{ row.product_code or '' }}" required></td>
+                        <td>{{ row.item }}</td>
+                        <td><input name="quantity" type="number" min="0" value="{{ row.quantity }}" required></td>
+                        <td><input name="low_threshold" type="number" min="0" value="{{ row.low_threshold }}" required></td>
+                        <td class="center">
+                            <input name="on_order" type="checkbox" value="1" {% if row.on_order %}checked{% endif %}>
+                        </td>
+                        <td>
+                            <button type="submit">Save</button>
+                            <a href="/delete/{{ row.item }}" class="delete" onclick="return confirm('Delete item?');">Delete</a>
+                        </td>
+                    </form>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h2>Add New Item</h2>
+        <form method="post" action="/add" onsubmit="return checkProductCode();">
+            <label>Product Code: <input name="product_code" id="product_code" type="text"></label>
+            <label>Item Name: <input name="item" id="item_name" type="text" required></label>
+            <label>Quantity: <input name="quantity" type="number" min="0" value="0" required></label>
+            <label>Low Threshold: <input name="low_threshold" type="number" min="0" value="5" required></label>
+            <label>On Order: <input name="on_order" type="checkbox" value="1"></label>
+            <button type="submit">Add Item</button>
+        </form>
+    </div>
+</body>
+</html>
