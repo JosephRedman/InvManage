@@ -115,4 +115,14 @@ rm inventory.db
 ## Copyright
 
 © Elec UK
-This software is proprietary. Redistribution, commercial or non-commercial, is not allowed, except by Joseph Redman.
+
+This software is provided for personal and non-commercial use only.
+You are welcome to modify, improve, and share your changes, as long as:
+
+   - Credit is given to the original author (Joseph Redman),
+
+   - You do not use the software or its derivatives for commercial purposes,
+
+   - You include this notice with any shared versions.
+
+All commercial rights are reserved by Joseph Redman.
